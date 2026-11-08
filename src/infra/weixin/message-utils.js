@@ -200,6 +200,9 @@ function parseCommand(text) {
     inspect_message: ["message"],
     help: ["help"],
     workspace: ["workspace"],
+    sessions: ["sessions"],
+    summary: ["summary"],
+    use: ["use"],
     new: ["new"],
     model: ["model", "model update"],
     effort: ["effort"],
@@ -215,6 +218,15 @@ function parseCommand(text) {
 
   if (matchesPrefixCommand(normalized, "switch")) {
     return "switch";
+  }
+  if (matchesPrefixCommand(normalized, "sessions")) {
+    return "sessions";
+  }
+  if (matchesPrefixCommand(normalized, "summary")) {
+    return "summary";
+  }
+  if (matchesPrefixCommand(normalized, "use")) {
+    return "use";
   }
   if (matchesPrefixCommand(normalized, "bind")) {
     return "bind";

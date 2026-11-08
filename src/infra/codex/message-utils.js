@@ -74,7 +74,7 @@ function mapCodexMessageToImEvent(message) {
       payload: {
         threadId,
         turnId,
-        state: "completed",
+        state: turnStatus === "interrupted" || turnStatus === "cancelled" ? "interrupted" : "completed",
       },
     };
   }
@@ -202,6 +202,8 @@ function extractThreadsFromListResponse(response) {
       title: normalizeIdentifier(thread?.name) || normalizeIdentifier(thread?.preview),
       updatedAt: Number(thread?.updatedAt || 0),
       sourceKind: extractThreadSourceKind(thread),
+      status: normalizeIdentifier(thread?.status?.type),
+      activeFlags: Array.isArray(thread?.status?.activeFlags) ? thread.status.activeFlags : [],
     }))
     .filter((thread) => thread.id);
 }
@@ -211,7 +213,10 @@ function extractThreadListCursor(response) {
 }
 
 function extractRecentConversationFromResumeResponse(response, turnLimit = 3) {
-  const turns = response?.result?.thread?.turns;
+  return extractRecentConversation(response?.result?.thread?.turns, turnLimit);
+}
+
+function extractRecentConversation(turns, turnLimit = 3) {
   if (!Array.isArray(turns) || !turns.length) {
     return [];
   }
@@ -558,6 +563,7 @@ function extractTextFromContent(content) {
 }
 
 module.exports = {
+  extractRecentConversation,
   buildApprovalResponsePayload,
   buildBindingMetadata,
   buildRunKey,
