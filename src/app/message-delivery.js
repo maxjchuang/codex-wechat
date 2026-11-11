@@ -53,6 +53,7 @@ class MessageDelivery {
     try {
       let row;
       while ((row = this.store.nextReply())) {
+        if (!this.store.hasReply(row.id)) continue;
         try {
           await this.send(JSON.parse(row.payload));
         } catch (error) {

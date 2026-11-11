@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { TaskWatches } = require("../src/app/task-watches");
 const { MessageStore } = require("../src/infra/storage/message-store");
+const { MessageDelivery } = require("../src/app/message-delivery");
 
 test("watching is read-only, follows exact turns across restart, and deduplicates milestone and terminal delivery", async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wechat-watches-"));
@@ -80,7 +81,7 @@ test("watching is read-only, follows exact turns across restart, and deduplicate
 test("the automatic assignment report owns the terminal notice when the same turn is watched", async () => {
   const store = new MessageStore(":memory:", "account");
   try {
-    const job = { id: "watch", sender: "owner", thread: "thread", turn: "turn" };
+    const job = { id: "watch", sender: "owner", thread: "thread", turn: "turn", payload: "{}" };
     store.addTaskWatch({ ...job, payload: {}, progress: null, retryAt: 0 });
     store.addTaskReport("report", job.thread, { senderId: job.sender }, 0);
     store.setReportTurn("report", job.turn);
@@ -91,6 +92,65 @@ test("the automatic assignment report owns the terminal notice when the same tur
     store.acknowledgeReply("report-notice");
     store.addTaskWatch({ ...job, payload: {}, progress: null, retryAt: 0 });
     store.finishTaskWatch(job, [{ client_id: "duplicate-notice" }]);
+    assert.equal(store.nextReply(), undefined);
+  } finally {
+    store.close();
+  }
+});
+
+test("cancellation withdraws failed and finished watch notices across restart without touching other replies", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wechat-cancel-"));
+  const filename = path.join(directory, "deliveries.sqlite");
+  let store = new MessageStore(filename, "account");
+  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const watch = (id, cwd, sender = "owner") => {
+    store.addTaskWatch({ id, sender, thread: id, turn: id, payload: { title: id, cwd }, progress: null, retryAt: 0 });
+    return store.nextTaskWatches([], 10).find((row) => row.id === id);
+  };
+  const running = watch("running", "/atoms-demo");
+  const finished = watch("finished", "/atoms-demo");
+  const other = watch("other", "/other");
+  const otherSender = watch("other-sender", "/atoms-demo", "another");
+  store.advanceTaskWatch(running, 0, { messages: [{ client_id: "retry" }] });
+  const attempted = [];
+  const failingDelivery = new MessageDelivery({
+    store, send: async (message) => { attempted.push(message.client_id); throw new Error("retry"); },
+    reportError: () => {},
+  });
+  await failingDelivery.flushReplies();
+  assert.deepEqual(attempted, ["retry"]);
+  store.finishTaskWatch(finished, [{ client_id: "terminal-first" }, { client_id: "terminal-second" }]);
+  store.advanceTaskWatch(other, 0, { messages: [{ client_id: "other-project" }] });
+  store.advanceTaskWatch(otherSender, 0, { messages: [{ client_id: "different-owner" }] });
+  const legacy = (id, text) => ({
+    client_id: id, to_user_id: "owner", item_list: [{ text_item: { text } }],
+  });
+  store.enqueueReplies([
+    legacy("legacy-progress", "「调研」有新进展\n项目：atoms-demo\n\n已有进展"),
+    legacy("automatic-report", "「调研 atoms-demo」已完成\n任务：验收\n\n结果"),
+    legacy("ordinary", "「atoms-demo」\n空闲。"),
+  ]);
+  const matches = ({ cwd }) => cwd === "/atoms-demo" || cwd === "atoms-demo";
+  const cancellation = store.cancelTaskWatches("owner", matches);
+  assert.deepEqual(cancellation.stopped.map(({ id }) => id), ["running"]);
+  assert.equal(cancellation.withdrawn, 4);
+  store.advanceTaskWatch(running, 0, { messages: [{ client_id: "late" }] });
+  store.close();
+  store = new MessageStore(filename, "account");
+  const delivered = [];
+  await new MessageDelivery({
+    store, send: async (message) => delivered.push(message.client_id), reportError: (error) => { throw error; },
+  }).flushReplies();
+  assert.deepEqual(delivered, ["other-project", "different-owner", "automatic-report", "ordinary"]);
+});
+
+test("an ended watch can withdraw queued notices without an active subscription", () => {
+  const store = new MessageStore(":memory:", "account");
+  try {
+    const job = { id: "watch", sender: "owner", thread: "thread", turn: "turn" };
+    store.addTaskWatch({ ...job, payload: { title: "atoms-demo" }, progress: null, retryAt: 0 });
+    store.finishTaskWatch(store.nextTaskWatches([], 1)[0], [{ client_id: "terminal" }]);
+    assert.deepEqual(store.cancelTaskWatches("owner", ({ thread }) => thread === job.thread), { stopped: [], withdrawn: 1 });
     assert.equal(store.nextReply(), undefined);
   } finally {
     store.close();

@@ -252,18 +252,20 @@ class TaskManager {
     const { runtime } = this;
     const watcher = runtime.taskWatches;
     if (!watcher) return runtime.sendReplyToNormalized(message, "监听服务暂不可用。");
-    const watches = watcher.list(message.senderId);
     if (intent.type === "watch_list") {
+      const watches = watcher.list(message.senderId);
       return runtime.sendReplyToNormalized(message, watches.length ? ["正在监听",
         ...watches.map(({ title, cwd }, index) => `${index + 1}. ${title} · ${path.basename(cwd)}`)].join("\n") : "目前没有正在监听的任务。");
     }
     const targets = intent.watchTargets?.length ? intent.watchTargets : [intent.query].filter(Boolean);
     const all = targets.includes("*") && /全部|所有|都|\ball\b/i.test(message.text);
-    const matches = watches.filter((watch) => all
-      || targets.some((target) => target === watch.thread || matchesSession({ ...watch, id: watch.thread }, target, true)));
-    const removed = matches.filter(({ id }) => watcher.remove(id));
-    return runtime.sendReplyToNormalized(message, removed.length ? `已停止监听 ${removed.map(({ title }) => `「${title}」`).join("、")}。`
-      : "没有找到要停止的监听。可以说「正在盯哪些任务」查看。");
+    const { stopped, withdrawn } = watcher.cancel(message.senderId, (watch) => all
+      || targets.some((target) => target === watch.thread || matchesSession({ ...watch, id: watch.thread || "" }, target, true)));
+    const lines = [];
+    if (stopped.length) lines.push(`已停止监听 ${stopped.map(({ title }) => `「${title}」`).join("、")}。`);
+    if (withdrawn) lines.push(`已撤销 ${withdrawn} 条待发送的监听消息。`);
+    return runtime.sendReplyToNormalized(message, lines.join("\n")
+      || "没有找到要停止的监听。可以说「正在盯哪些任务」查看。");
   }
 
   rememberChoices(message, sessions, intent = { type: "select" }) {

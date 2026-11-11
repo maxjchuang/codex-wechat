@@ -33,6 +33,10 @@ class TaskWatches {
     return this.store.removeTaskWatch(id);
   }
 
+  cancel(sender, matches) {
+    return this.store.cancelTaskWatches(sender, matches);
+  }
+
   async inspect(thread) {
     const page = await this.readTurns(thread.id);
     const turn = page.data?.[0];

@@ -81,7 +81,11 @@ test("one manager can add, list, and remove read-only watches across projects", 
       watches.push({ id: session.id, thread: session.id, sender: message.senderId, cwd: session.cwd, title, turn: turn.id });
       return "added";
     },
-    remove: (id) => watches.splice(watches.findIndex((watch) => watch.id === id), 1).length,
+    cancel: (sender, matches) => {
+      const stopped = watches.filter((watch) => watch.sender === sender && matches(watch));
+      for (const watch of stopped) watches.splice(watches.indexOf(watch), 1);
+      return { stopped, withdrawn: 0 };
+    },
   };
   runtime.taskManager.model = { plan: async ({ text }) => text.includes("别再")
     ? { type: "unwatch", watchTargets: ["project-a"] }

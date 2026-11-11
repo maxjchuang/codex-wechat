@@ -46,6 +46,10 @@ class MessageStore {
         PRIMARY KEY (account, sender, thread, turn)
       );
     `);
+    this.transaction(() => {
+      const columns = this.db.prepare("PRAGMA table_info(outbox)").all();
+      if (!columns.some(({ name }) => name === "watch")) this.db.exec("ALTER TABLE outbox ADD COLUMN watch TEXT");
+    });
   }
 
   close() {
@@ -126,10 +130,11 @@ class MessageStore {
     return this.db.prepare("SELECT state FROM inbox WHERE account = ? AND id = ?").get(this.accountId, id)?.state === "waiting";
   }
 
-  insertReplies(messages) {
-    const insert = this.db.prepare("INSERT OR IGNORE INTO outbox (account, id, payload) VALUES (?, ?, ?)");
+  insertReplies(messages, watch = null) {
+    const insert = this.db.prepare("INSERT OR IGNORE INTO outbox (account, id, payload, watch) VALUES (?, ?, ?, ?)");
+    const source = watch ? JSON.stringify(watch) : null;
     for (const message of messages) {
-      insert.run(this.accountId, message.client_id, JSON.stringify(message));
+      insert.run(this.accountId, message.client_id, JSON.stringify(message), source);
     }
   }
 
@@ -151,6 +156,10 @@ class MessageStore {
 
   acknowledgeReply(id) {
     this.db.prepare("DELETE FROM outbox WHERE account = ? AND id = ?").run(this.accountId, id);
+  }
+
+  hasReply(id) {
+    return Boolean(this.db.prepare("SELECT 1 FROM outbox WHERE account = ? AND id = ?").get(this.accountId, id));
   }
 
   delayReply(id, retryAt) {
@@ -205,10 +214,10 @@ class MessageStore {
     });
   }
 
-  insertTerminalNotice(sender, thread, turn, messages) {
+  insertTerminalNotice(sender, thread, turn, messages, watch) {
     if (!messages.length) return;
     if (!sender || !turn || this.db.prepare("INSERT OR IGNORE INTO task_terminal_notices VALUES (?, ?, ?, ?)")
-      .run(this.accountId, sender, thread, turn).changes) this.insertReplies(messages);
+      .run(this.accountId, sender, thread, turn).changes) this.insertReplies(messages, watch);
   }
 
   addTaskWatch({ id, sender, thread, turn, payload, progress, retryAt }) {
@@ -233,7 +242,7 @@ class MessageStore {
     this.transaction(() => {
       const update = this.db.prepare("UPDATE task_watches SET retry_at = ?, cursor = ?, progress = ?, progress_at = ? WHERE account = ? AND id = ?")
         .run(retryAt, cursor, progress, progressAt, this.accountId, job.id);
-      if (update.changes) this.insertReplies(messages);
+      if (update.changes && messages.length) this.insertReplies(messages, watchSource(job));
     });
   }
 
@@ -241,14 +250,46 @@ class MessageStore {
     return this.db.prepare("DELETE FROM task_watches WHERE account = ? AND id = ?").run(this.accountId, id).changes;
   }
 
+  cancelTaskWatches(sender, matches) {
+    return this.transaction(() => {
+      const stopped = this.listTaskWatches(sender).map(watchSource).filter(matches);
+      for (const watch of stopped) this.removeTaskWatch(watch.id);
+      const pending = this.db.prepare(`SELECT id, payload, watch FROM outbox WHERE account = ?
+        AND (json_extract(watch, '$.sender') = ? OR (watch IS NULL AND json_extract(payload, '$.to_user_id') = ?))`)
+        .all(this.accountId, sender, sender);
+      let withdrawn = 0;
+      for (const row of pending) {
+        const watch = row.watch ? JSON.parse(row.watch) : legacyWatchSource(JSON.parse(row.payload));
+        if (watch && matches(watch)) {
+          this.acknowledgeReply(row.id);
+          withdrawn += 1;
+        }
+      }
+      return { stopped, withdrawn };
+    });
+  }
+
   finishTaskWatch(job, messages) {
     this.transaction(() => {
       if (!this.removeTaskWatch(job.id)) return;
       const assigned = this.db.prepare(`SELECT 1 FROM task_reports WHERE account = ? AND thread = ? AND turn = ?
         AND json_extract(payload, '$.senderId') = ? LIMIT 1`).get(this.accountId, job.thread, job.turn, job.sender);
-      if (!assigned) this.insertTerminalNotice(job.sender, job.thread, job.turn, messages);
+      if (!assigned) this.insertTerminalNotice(job.sender, job.thread, job.turn, messages, watchSource(job));
     });
   }
+}
+
+function watchSource({ id, sender, thread, turn, payload }) {
+  const { title, cwd } = JSON.parse(payload);
+  return { id, sender, thread, turn, title, cwd };
+}
+
+function legacyWatchSource(message) {
+  const text = message.item_list?.[0]?.text_item?.text;
+  if (typeof text !== "string") return null;
+  const match = /^「([^\r\n]+)」(?:有新进展|已完成|执行失败|已中断)\r?\n(?:项目：([^\r\n]+)\r?\n)?\r?\n/.exec(text);
+  if (!match) return null;
+  return { title: match[1], cwd: match[2] || "" };
 }
 
 module.exports = { MessageStore };
