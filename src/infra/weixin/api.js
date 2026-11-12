@@ -113,15 +113,13 @@ async function apiFetch(params) {
       body: params.body,
       signal: controller.signal,
     });
-    clearTimeout(timer);
     const rawText = await response.text();
     if (!response.ok) {
       throw new Error(`${params.label} ${response.status}: ${redactSensitiveText(rawText)}`);
     }
     return rawText;
-  } catch (error) {
+  } finally {
     clearTimeout(timer);
-    throw error;
   }
 }
 
@@ -142,14 +140,14 @@ async function getUpdates(params) {
     return JSON.parse(rawText);
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf || "" };
+      return { ret: 0, msgs: [], get_updates_buf: params.get_updates_buf || "", timedOut: true };
     }
     throw error;
   }
 }
 
 async function sendMessage(params) {
-  await apiFetch({
+  const response = await apiFetch({
     baseUrl: params.baseUrl,
     endpoint: "ilink/bot/sendmessage",
     body: JSON.stringify({ ...params.body, base_info: buildBaseInfo() }),
@@ -157,6 +155,10 @@ async function sendMessage(params) {
     timeoutMs: params.timeoutMs || DEFAULT_API_TIMEOUT_MS,
     label: "sendMessage",
   });
+  const result = JSON.parse(response);
+  if (Number(result.ret || 0) !== 0 || Number(result.errcode || 0) !== 0) {
+    throw new Error(`微信回发失败 (${result.errcode || result.ret})`);
+  }
 }
 
 async function getUploadUrl(params) {

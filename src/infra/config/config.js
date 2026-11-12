@@ -17,6 +17,7 @@ function readConfig() {
     cdnBaseUrl: process.env.CODEX_WECHAT_CDN_BASE_URL || "https://novac2c.cdn.weixin.qq.com/c2c",
     accountId: process.env.CODEX_WECHAT_ACCOUNT_ID || "",
     allowedUserIds: readListEnv("CODEX_WECHAT_ALLOWED_USER_IDS"),
+    allLocalSessions: readBooleanEnv("CODEX_WECHAT_ALL_LOCAL_SESSIONS", false),
     workspaceAllowlist: readListEnv("CODEX_WECHAT_WORKSPACE_ALLOWLIST"),
     defaultWorkspaceRoot: readTextEnv("CODEX_WECHAT_DEFAULT_WORKSPACE"),
     defaultWorkspaceId: process.env.CODEX_WECHAT_DEFAULT_WORKSPACE_ID || "default",
@@ -28,6 +29,10 @@ function readConfig() {
     enableTyping: readBooleanEnv("CODEX_WECHAT_ENABLE_TYPING", true),
     sessionsFile: process.env.CODEX_WECHAT_SESSIONS_FILE
       || path.join(stateDir, "sessions.json"),
+    deliveriesFile: path.join(stateDir, "deliveries.sqlite"),
+    modelApiKey: readTextEnv("CODEX_WECHAT_MODEL_API_KEY"),
+    agentManager: readBooleanEnv("CODEX_WECHAT_AGENT_MANAGER", false),
+    managerModel: readTextEnv("CODEX_WECHAT_MANAGER_MODEL"),
     syncBufferDir: process.env.CODEX_WECHAT_SYNC_BUFFER_DIR
       || path.join(stateDir, "sync-buf"),
     accountsDir: path.join(stateDir, "accounts"),

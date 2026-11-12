@@ -37,12 +37,67 @@ class SessionStore {
     }
   }
 
-  save() {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2));
+  save(state = this.state) {
+    const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2), { mode: 0o600 });
+    fs.renameSync(temporaryPath, this.filePath);
   }
 
   getBinding(bindingKey) {
     return this.state.bindings[bindingKey] || null;
+  }
+
+  getManagerTarget(bindingKey) {
+    return this.state.managerTargets?.[bindingKey] || null;
+  }
+
+  setManagerTarget(bindingKey, target) {
+    this.setManagerRecord("managerTargets", bindingKey, target);
+  }
+
+  getManagerThread(bindingKey) {
+    return this.state.managerThreads?.[bindingKey] || "";
+  }
+
+  setManagerThread(bindingKey, threadId) {
+    this.setManagerRecord("managerThreads", bindingKey, threadId);
+  }
+
+  getPendingInvestigation(bindingKey) {
+    return this.state.pendingInvestigations?.[bindingKey] || null;
+  }
+
+  setPendingInvestigation(bindingKey, investigation) {
+    this.setManagerRecord("pendingInvestigations", bindingKey, investigation);
+  }
+
+  getPendingSessionCreation(bindingKey) {
+    return this.state.pendingSessionCreations?.[bindingKey] || null;
+  }
+
+  setPendingSessionCreation(bindingKey, creation) {
+    this.setManagerRecord("pendingSessionCreations", bindingKey, creation);
+  }
+
+  isManagerThread(threadId) {
+    return Object.values(this.state.managerThreads || {}).includes(threadId);
+  }
+
+  getManagerList(bindingKey) {
+    return this.state.managerLists?.[bindingKey] || null;
+  }
+
+  setManagerList(bindingKey, list) {
+    this.setManagerRecord("managerLists", bindingKey, list);
+  }
+
+  setManagerRecord(field, bindingKey, record) {
+    const records = { ...this.state[field] };
+    if (record) records[bindingKey] = record;
+    else delete records[bindingKey];
+    const state = { ...this.state, [field]: records };
+    this.save(state);
+    this.state = state;
   }
 
   listWorkspaceRoots(bindingKey) {
@@ -85,7 +140,11 @@ class SessionStore {
     return this.state.bindings[bindingKey]?.threadIdByWorkspaceRoot?.[normalizedWorkspaceRoot] || "";
   }
 
-  setThreadIdForWorkspace(bindingKey, workspaceRoot, threadId, extra = {}) {
+  isExplicitThreadSelection(bindingKey, workspaceRoot) {
+    return this.getBinding(bindingKey)?.explicitThreadByWorkspaceRoot?.[workspaceRoot] === true;
+  }
+
+  setThreadIdForWorkspace(bindingKey, workspaceRoot, threadId, extra = {}, { explicit = false } = {}) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return this.getBinding(bindingKey);
@@ -105,6 +164,10 @@ class SessionStore {
       ...current,
       ...extra,
       activeWorkspaceRoot: normalizedWorkspaceRoot,
+      explicitThreadByWorkspaceRoot: {
+        ...current.explicitThreadByWorkspaceRoot,
+        [normalizedWorkspaceRoot]: explicit,
+      },
       pendingNewThreadByWorkspaceRoot,
       threadIdByWorkspaceRoot,
     });
@@ -124,6 +187,10 @@ class SessionStore {
 
     return this.updateBinding(bindingKey, {
       ...current,
+      explicitThreadByWorkspaceRoot: {
+        ...current.explicitThreadByWorkspaceRoot,
+        [normalizedWorkspaceRoot]: false,
+      },
       threadIdByWorkspaceRoot,
     });
   }
@@ -236,6 +303,7 @@ class SessionStore {
     const threadIdByWorkspaceRoot = getThreadMap(current);
     const codexParamsByWorkspaceRoot = getCodexParamsMap(current);
     const pendingNewThreadByWorkspaceRoot = getPendingNewThreadMap(current);
+    const explicitThreadByWorkspaceRoot = { ...current.explicitThreadByWorkspaceRoot };
     const hasWorkspaceEntry = Object.prototype.hasOwnProperty.call(
       threadIdByWorkspaceRoot,
       normalizedWorkspaceRoot
@@ -248,6 +316,7 @@ class SessionStore {
     delete threadIdByWorkspaceRoot[normalizedWorkspaceRoot];
     delete codexParamsByWorkspaceRoot[normalizedWorkspaceRoot];
     delete pendingNewThreadByWorkspaceRoot[normalizedWorkspaceRoot];
+    delete explicitThreadByWorkspaceRoot[normalizedWorkspaceRoot];
 
     const nextActiveWorkspaceRoot = activeWorkspaceRoot === normalizedWorkspaceRoot
       ? (Object.keys(threadIdByWorkspaceRoot).sort((left, right) => left.localeCompare(right))[0] || "")
@@ -256,6 +325,7 @@ class SessionStore {
     return this.updateBinding(bindingKey, {
       ...current,
       activeWorkspaceRoot: nextActiveWorkspaceRoot,
+      explicitThreadByWorkspaceRoot,
       codexParamsByWorkspaceRoot,
       pendingNewThreadByWorkspaceRoot,
       threadIdByWorkspaceRoot,
@@ -293,12 +363,17 @@ class SessionStore {
   }
 
   updateBinding(bindingKey, nextBinding) {
-    this.state.bindings[bindingKey] = {
+    const binding = {
       ...nextBinding,
       updatedAt: new Date().toISOString(),
     };
-    this.save();
-    return this.state.bindings[bindingKey];
+    const state = {
+      ...this.state,
+      bindings: { ...this.state.bindings, [bindingKey]: binding },
+    };
+    this.save(state);
+    this.state = state;
+    return binding;
   }
 
   buildBindingKey({ workspaceId, accountId, senderId }) {
@@ -309,6 +384,11 @@ class SessionStore {
 function createEmptyState() {
   return {
     bindings: {},
+    managerTargets: {},
+    managerThreads: {},
+    pendingInvestigations: {},
+    pendingSessionCreations: {},
+    managerLists: {},
     approvalCommandAllowlistByWorkspaceRoot: {},
     availableModelCatalog: {
       models: [],
